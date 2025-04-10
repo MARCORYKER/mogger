@@ -1,0 +1,261 @@
+from flask import Flask, request, jsonify
+import cv2
+import numpy as np
+import dlib
+import os
+
+app = Flask(__name__)
+
+predictor_path = "shape_predictor_68_face_landmarks.dat"
+detector = dlib.get_frontal_face_detector()
+try:
+    predictor = dlib.shape_predictor(predictor_path)
+    print("Predictor loaded successfully")
+except Exception as e:
+    print(f"Failed to load predictor: {e}")
+
+def calculate_symmetry(landmarks):
+    left_eye = np.mean(landmarks[36:42], axis=0)
+    right_eye = np.mean(landmarks[42:48], axis=0)
+    nose_tip = landmarks[30]
+    eye_distance = np.linalg.norm(left_eye - right_eye)
+    nose_to_mid = np.linalg.norm(nose_tip - (left_eye + right_eye) / 2)
+    
+    print(f"Left Eye: {left_eye}, Right Eye: {right_eye}, Nose: {nose_tip}")
+    print(f"Eye Distance: {eye_distance}, Nose to Mid: {nose_to_mid}")
+    
+    diff = eye_distance / nose_to_mid if nose_to_mid != 0 else 1
+    score = 10 - min(diff * 2, 9)
+    final_score = max(min(score, 10), 1)
+    print(f"Symmetry Diff: {diff}, Raw Score: {score}, Clamped: {final_score}")
+    return final_score
+
+def calculate_jawline_sharpness(landmarks):
+    jawline = landmarks[0:17]
+    angles = []
+    for i in range(len(jawline) - 2):
+        vec1 = jawline[i + 1] - jawline[i]
+        vec2 = jawline[i + 2] - jawline[i + 1]
+        angle = np.arccos(np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2)))
+        angles.append(angle)
+    jaw_score = min(np.mean(angles) * 10, 10)
+    print(f"Jawline Angles: {angles[:3]}..., Score: {jaw_score}")
+    return jaw_score
+
+def calculate_skin_quality(image):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    contrast = cv2.Laplacian(gray, cv2.CV_64F).var()
+    skin_score = min(contrast / 50, 10)
+    print(f"Skin Contrast: {contrast}, Score: {skin_score}")
+    return skin_score
+
+def calculate_facial_ratios(landmarks):
+    width = np.linalg.norm(landmarks[0] - landmarks[16])
+    height = np.linalg.norm(landmarks[8] - np.mean(landmarks[19:25], axis=0))
+    ratio = height / width
+    ratio_score = min(ratio * 10, 10)
+    print(f"Width: {width}, Height: {height}, Ratio: {ratio}, Score: {ratio_score}")
+    return ratio_score
+
+def analyze_face(image_path):
+    print(f"Processing image: {image_path}")
+    img = cv2.imread(image_path)
+    if img is None:
+        print("Image load failed")
+        return {"error": "Invalid image file"}
+    
+    print(f"Image shape: {img.shape}")
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    faces = detector(gray, 1)
+    print(f"Detected {len(faces)} faces")
+
+    if len(faces) == 0:
+        print("No faces found")
+        return {"error": "No face detected"}
+
+    for i, face in enumerate(faces):
+        print(f"Face {i}: {face.left(), face.top(), face.right(), face.bottom()}")
+        landmarks = predictor(gray, face)
+        landmarks = np.array([(p.x, p.y) for p in landmarks.parts()])
+        print(f"Landmarks (sample): {landmarks[30]} (nose), {landmarks[36]} (left eye), {landmarks[42]} (right eye)")
+
+        symmetry_score = calculate_symmetry(landmarks)
+        jawline_score = calculate_jawline_sharpness(landmarks)
+        skin_quality_score = calculate_skin_quality(img)
+        facial_ratios_score = calculate_facial_ratios(landmarks)
+        final_score = (symmetry_score + jawline_score + skin_quality_score + facial_ratios_score) / 4
+
+        print(f"Scores - Symmetry: {symmetry_score}, Jawline: {jawline_score}, Skin: {skin_quality_score}, Ratios: {facial_ratios_score}")
+        print(f"Final Score: {final_score}")
+
+        funny_ratings = ['Goblin Mode', 'Decent', 'Certified Mogger', 'Greek God']
+        rating_index = min(int(final_score * 4 // 10), len(funny_ratings) - 1)
+        rating = funny_ratings[rating_index]
+
+        recommendations = []
+        # Symmetry
+        if symmetry_score < 4:
+            recommendations.append(f"Symmetry at {symmetry_score:.2f} - facial exercises could help balance things out.")
+        elif symmetry_score < 7:
+            recommendations.append(f"Symmetry at {symmetry_score:.2f} - pretty balanced, maybe tweak posture.")
+        else:
+            recommendations.append(f"Symmetry at {symmetry_score:.2f} - damn, that’s symmetrical!")
+
+        # Jawline
+        if jawline_score < 3:
+            recommendations.append(f"Jawline at {jawline_score:.2f} - chew some gum to sharpen it up.")
+        elif jawline_score < 6:
+            recommendations.append(f"Jawline at {jawline_score:.2f} - decent edge, try mewing for more definition.")
+        else:
+            recommendations.append(f"Jawline at {jawline_score:.2f} - chiseled vibes, keep it up!")
+
+        # Skin
+        if skin_quality_score < 3:
+            recommendations.append(f"Skin at {skin_quality_score:.2f} - hydrate and start a basic skincare routine.")
+        elif skin_quality_score < 6:
+            recommendations.append(f"Skin at {skin_quality_score:.2f} - not bad, add a cleanser to glow up.")
+        else:
+            recommendations.append(f"Skin at {skin_quality_score:.2f} - smooth as hell, maintain that!")
+
+        # Ratios
+        if facial_ratios_score < 7:
+            recommendations.append(f"Ratios at {facial_ratios_score:.2f} - hairstyle tweak could balance it.")
+        else:
+            recommendations.append(f"Ratios at {facial_ratios_score:.2f} - proportions on point!")
+
+        # Final Score
+        if final_score > 8:
+            recommendations.append("Overall mogger energy - keep slaying!")
+        elif final_score < 4:
+            recommendations.append("Rough start, but small tweaks can level you up!")
+
+        return {
+            "symmetry": round(symmetry_score, 2),
+            "jawline": round(jawline_score, 2),
+            "skinQuality": round(skin_quality_score, 2),
+            "facialRatios": round(facial_ratios_score, 2),
+            "finalScore": round(final_score, 2),
+            "rating": rating,
+            "recommendations": recommendations
+        }
+
+@app.route('/')
+def serve_frontend():
+    return """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Face Analysis</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                text-align: center;
+                margin: 20px;
+                background: linear-gradient(135deg, #1E1E1E, #333);
+                color: white;
+            }
+            #container {
+                max-width: 500px;
+                margin: auto;
+                padding: 20px;
+                background: rgba(255, 255, 255, 0.1);
+                border-radius: 10px;
+                box-shadow: 0px 0px 10px rgba(255, 255, 255, 0.2);
+            }
+            #image-preview {
+                max-width: 100%;
+                margin-top: 20px;
+                display: none;
+                border-radius: 10px;
+            }
+            #results {
+                margin-top: 20px;
+                font-size: 18px;
+            }
+            button {
+                background: #00ADB5;
+                color: white;
+                padding: 10px;
+                border: none;
+                border-radius: 5px;
+                cursor: pointer;
+                transition: 0.3s;
+            }
+            button:hover {
+                background: #007c8e;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="container">
+            <h2>Upload an Image for Face Analysis</h2>
+            <input type="file" id="imageInput" accept="image/*">
+            <button onclick="uploadImage()">Analyze</button>
+            <br>
+            <img id="image-preview" src="">
+            <div id="results"></div>
+        </div>
+
+        <script>
+            function uploadImage() {
+                const input = document.getElementById("imageInput");
+                if (!input.files.length) {
+                    alert("Please select an image.");
+                    return;
+                }
+
+                const file = input.files[0];
+                const formData = new FormData();
+                formData.append("image", file);
+
+                document.getElementById("image-preview").src = URL.createObjectURL(file);
+                document.getElementById("image-preview").style.display = "block";
+
+                fetch("/analyze", {
+                    method: "POST",
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        document.getElementById("results").innerHTML = `<p style="color:red;">${data.error}</p>`;
+                        return;
+                    }
+
+                    document.getElementById("results").innerHTML = `
+                        <h3>Analysis Results</h3>
+                        <p><strong>Symmetry Score:</strong> ${data.symmetry}/10</p>
+                        <p><strong>Jawline Sharpness:</strong> ${data.jawline}/10</p>
+                        <p><strong>Skin Quality:</strong> ${data.skinQuality}/10</p>
+                        <p><strong>Facial Proportions:</strong> ${data.facialRatios}/10</p>
+                        <p><strong>Final Score:</strong> ${data.finalScore}/10</p>
+                        <p><strong>Rating:</strong> ${data.rating}</p>
+                        <h4>Recommendations</h4>
+                        <ul>${data.recommendations.map(r => `<li>${r}</li>`).join("")}</ul>
+                    `;
+                })
+                .catch(error => console.error("Error:", error));
+            }
+        </script>
+    </body>
+    </html>
+    """
+
+@app.route('/analyze', methods=['POST'])
+def upload_file():
+    if 'image' not in request.files:
+        print("No image in request")
+        return jsonify({"error": "No image uploaded"})
+    file = request.files['image']
+    file_path = f"temp_{os.urandom(8).hex()}.jpg"
+    print(f"Saving to: {file_path}")
+    file.save(file_path)
+    result = analyze_face(file_path)
+    os.remove(file_path)
+    print(f"Result: {result}")
+    return jsonify(result)
+
+if __name__ == '__main__':
+    app.run(debug=True)
