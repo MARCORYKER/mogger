@@ -1,0 +1,29 @@
+# Python
+*.pyc
+*.pyo
+__pycache__
+
+# Virtual Environment
+venv/
+env/
+ENV/
+venv.bak/
+.env/
+
+# Flask
+instance/
+.webassets-cache
+
+# IDEs
+.idea/
+.vscode/
+
+# Logs
+*.log
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# dotenv environment variables file
+.env
